@@ -83,7 +83,8 @@ function love.load()
             visitTime = 0,
             maxVisitTime = love.math.random(2, 4),
             color = {1, 0.8, 0, 1}, -- Yellow
-            wingColor = {0.9, 0.7, 0, 1} -- Darker yellow
+            wingColor = {0.9, 0.7, 0, 1}, -- Darker yellow
+            isAlive = true -- Track if bee is alive
         }
         table.insert(bees, bee)
     end
@@ -93,9 +94,37 @@ function love.load()
         findNewTarget(bee)
     end
     
-
+    -- Initialize monster blob
+    blob = {
+        x = love.graphics.getWidth() / 2,
+        y = love.graphics.getHeight() / 1.2,
+        size = 80,
+        tentacles = {},
+        maxTentacles = 6,
+        tentacleReach = 150,
+        tentacleSpeed = 200,
+        tentacleThickness = 8,
+        color = {0.3, 0.1, 0.6, 1}, -- Dark purple
+        tentacleColor = {0.4, 0.2, 0.7, 1}, -- Lighter purple
+        pulseOffset = 0,
+        pulseSpeed = 3,
+        isGrabbing = false
+    }
     
-
+    -- Initialize tentacles
+    for i = 1, blob.maxTentacles do
+        local angle = (i - 1) * (2 * math.pi / blob.maxTentacles)
+        local tentacle = {
+            angle = angle,
+            length = 0,
+            targetLength = 0,
+            isExtended = false,
+            targetBee = nil,
+            grabTime = 0,
+            maxGrabTime = 1.5
+        }
+        table.insert(blob.tentacles, tentacle)
+    end
 end
 
 function love.update(dt)
@@ -104,7 +133,6 @@ function love.update(dt)
         flower.windOffset = flower.windOffset + flower.windSpeed * dt
     end
     
-
     
     -- Update particles
     particles:update(dt)
@@ -126,6 +154,9 @@ function love.update(dt)
     for i, bee in ipairs(bees) do
         updateBee(bee, dt)
     end
+    
+    -- Update monster blob
+    updateBlob(dt)
 end
 
 function love.draw()
@@ -146,10 +177,18 @@ function love.draw()
     love.graphics.setColor(1, 1, 1, 1)
     love.graphics.draw(particles)
     
+    -- Draw monster blob
+    drawBlob()
+    
     -- Draw bees
     for i, bee in ipairs(bees) do
-        drawBee(bee)
+        if bee.isAlive then
+            drawBee(bee)
+        end
     end
+    
+    -- Draw stats in top right corner
+    drawStats()
 end
 
 function drawGradientBackground()
@@ -417,6 +456,170 @@ function love.keypressed(key)
     if key == "escape" then
         love.event.quit()
     end
+end
+
+function updateBlob(dt)
+    -- Update blob pulse
+    blob.pulseOffset = blob.pulseOffset + blob.pulseSpeed * dt
+    
+    -- Check for nearby bees and extend tentacles
+    for i, tentacle in ipairs(blob.tentacles) do
+        if not tentacle.isExtended then
+            -- Look for bees within reach
+            local closestBee = nil
+            local closestDistance = blob.tentacleReach
+            
+            for j, bee in ipairs(bees) do
+                if bee.isAlive then
+                    local dx = bee.x - blob.x
+                    local dy = bee.y - blob.y
+                    local distance = math.sqrt(dx * dx + dy * dy)
+                    
+                    if distance < closestDistance then
+                        -- Check if bee is in the tentacle's direction
+                        local beeAngle = math.atan2(dy, dx)
+                        local angleDiff = math.abs(beeAngle - tentacle.angle)
+                        if angleDiff > math.pi then
+                            angleDiff = 2 * math.pi - angleDiff
+                        end
+                        
+                        -- Tentacle can reach in a 60-degree cone
+                        if angleDiff < math.pi / 3 then
+                            closestBee = bee
+                            closestDistance = distance
+                        end
+                    end
+                end
+            end
+            
+            -- Extend tentacle if bee is close enough
+            if closestBee and closestDistance < blob.tentacleReach * 0.8 then
+                tentacle.isExtended = true
+                tentacle.targetBee = closestBee
+                tentacle.targetLength = closestDistance
+                blob.isGrabbing = true
+            end
+        else
+            -- Update extended tentacle
+            if tentacle.targetBee and tentacle.targetBee.isAlive then
+                -- Update target position as bee moves
+                local dx = tentacle.targetBee.x - blob.x
+                local dy = tentacle.targetBee.y - blob.y
+                local distance = math.sqrt(dx * dx + dy * dy)
+                tentacle.targetLength = distance
+                
+                -- Extend tentacle towards bee
+                tentacle.length = tentacle.length + blob.tentacleSpeed * dt
+                if tentacle.length >= tentacle.targetLength then
+                    tentacle.length = tentacle.targetLength
+                    tentacle.grabTime = tentacle.grabTime + dt
+                    
+                    -- Grab the bee after holding it for a while
+                    if tentacle.grabTime >= tentacle.maxGrabTime then
+                        tentacle.targetBee.isAlive = false
+                        tentacle.isExtended = false
+                        tentacle.length = 0
+                        tentacle.targetBee = nil
+                        tentacle.grabTime = 0
+                        blob.isGrabbing = false
+                    end
+                end
+            else
+                -- Bee died or disappeared, retract tentacle
+                tentacle.isExtended = false
+                tentacle.length = 0
+                tentacle.targetBee = nil
+                tentacle.grabTime = 0
+                blob.isGrabbing = false
+            end
+        end
+        
+        -- Retract tentacle if it's not extended
+        if not tentacle.isExtended and tentacle.length > 0 then
+            tentacle.length = math.max(0, tentacle.length - blob.tentacleSpeed * dt * 2)
+        end
+    end
+end
+
+function drawBlob()
+    love.graphics.push()
+    love.graphics.translate(blob.x, blob.y)
+    
+    -- Draw tentacles first (behind the blob)
+    for i, tentacle in ipairs(blob.tentacles) do
+        if tentacle.length > 0 then
+            drawTentacle(tentacle)
+        end
+    end
+    
+    -- Draw main blob body with pulsing effect
+    local pulseSize = blob.size + math.sin(blob.pulseOffset) * 5
+    love.graphics.setColor(unpack(blob.color))
+    love.graphics.circle("fill", 0, 0, pulseSize)
+    
+    -- Draw blob details
+    love.graphics.setColor(0.2, 0.05, 0.4, 1)
+    love.graphics.circle("fill", 0, 0, pulseSize * 0.7)
+    
+    -- Draw eyes
+    love.graphics.setColor(1, 0.2, 0.2, 1)
+    love.graphics.circle("fill", -pulseSize * 0.3, -pulseSize * 0.2, pulseSize * 0.15)
+    love.graphics.circle("fill", pulseSize * 0.3, -pulseSize * 0.2, pulseSize * 0.15)
+    
+    -- Draw mouth
+    love.graphics.setColor(0.1, 0.05, 0.2, 1)
+    love.graphics.ellipse("fill", 0, pulseSize * 0.3, pulseSize * 0.4, pulseSize * 0.2)
+    
+    love.graphics.pop()
+end
+
+function drawTentacle(tentacle)
+    love.graphics.push()
+    love.graphics.rotate(tentacle.angle)
+    
+    -- Draw tentacle with segments for organic look
+    local segments = 8
+    local segmentLength = tentacle.length / segments
+    
+    love.graphics.setColor(unpack(blob.tentacleColor))
+    
+    for i = 1, segments do
+        local startT = (i - 1) / segments
+        local endT = i / segments
+        
+        local startX = startT * tentacle.length
+        local endX = endT * tentacle.length
+        
+        -- Add some waviness to tentacles
+        local waveOffset = math.sin(startT * math.pi * 2 + love.timer.getTime() * 2) * 3
+        local startY = waveOffset
+        local endY = math.sin(endT * math.pi * 2 + love.timer.getTime() * 2) * 3
+        
+        -- Thinner towards the tip
+        local thickness = blob.tentacleThickness * (1 - startT * 0.5)
+        
+        love.graphics.setLineWidth(thickness)
+        love.graphics.line(startX, startY, endX, endY)
+    end
+    
+    -- Draw tentacle tip
+    if tentacle.isExtended and tentacle.targetBee then
+        love.graphics.setColor(1, 0.3, 0.3, 1)
+        love.graphics.circle("fill", tentacle.length, 0, blob.tentacleThickness * 0.6)
+    end
+    
+    love.graphics.pop()
+end
+
+function drawStats()
+    local aliveBees = 0
+    for i, bee in ipairs(bees) do
+        if bee.isAlive then
+            aliveBees = aliveBees + 1
+        end
+    end
+    love.graphics.setColor(1, 1, 1, 1)
+    love.graphics.print("Alive Bees: " .. aliveBees, love.graphics.getWidth() - 150, 10)
 end
 
 
